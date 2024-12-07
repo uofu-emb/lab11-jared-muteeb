@@ -4,9 +4,11 @@ if(WIN32)
 else()
     set(USERHOME $ENV{HOME})
 endif()
+
 set(sdkVersion 2.0.0)
 set(toolchainVersion 13_2_Rel1)
 set(picotoolVersion 2.0.0)
+
 if(EXISTS ${USERHOME}/.pico-sdk/cmake/pico-vscode.cmake)
     include(${USERHOME}/.pico-sdk/cmake/pico-vscode.cmake)
 elseif(DEFINED ENV{PICO_SDK_PATH})
@@ -15,14 +17,11 @@ else()
     set(PICO_SDK_PATH lib/pico-sdk)
 endif()
 
-if(DEFINED ENV{FREERTOS_KERNEL_PATH})
-    set(FREERTOS_KERNEL_PATH $ENV{FREERTOS_KERNEL_PATH})
-else()
-    set(FREERTOS_KERNEL_PATH lib/freertos)
-endif()
+set(FREERTOS_KERNEL_PATH ${CMAKE_CURRENT_SOURCE_DIR}/lib/freertos)
 message("FreeRTOS path: ${FREERTOS_KERNEL_PATH}")
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 # ====================================================================================
 cmake_minimum_required(VERSION 3.13)
 

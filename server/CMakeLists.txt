@@ -2,6 +2,7 @@
 add_executable(lab11_server
   picow_bt_example_freertos.c
   gatt_counter.c
+  temp_sense.c
 )
 
 target_compile_definitions(lab11_server PRIVATE
@@ -31,6 +32,5 @@ pico_enable_stdio_uart(lab11_server 0)
 pico_enable_stdio_usb(lab11_server 1)
 
 pico_add_extra_outputs(lab11_server)
-
 
 add_custom_target(flash_server picotool load -f $<TARGET_FILE:lab11_server> DEPENDS lab11_server)
