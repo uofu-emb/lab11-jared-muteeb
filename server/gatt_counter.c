@@ -45,18 +45,26 @@
  * with a custom GATT Service and a custom Characteristic that sends periodic
  * notifications.
  */
- // *****************************************************************************
+// *****************************************************************************
 
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
+#include <FreeRTOS.h>
+#include <task.h>
+#include <semphr.h>
+#include <btstack.h>
+#include <ble/att_db.h>
+#include <ble/gatt-service/battery_service_server.h>
 #include "gatt_counter.h"
-#include "btstack.h"
-#include "ble/gatt-service/battery_service_server.h"
+#include "temp_sense.h"
 
 #define HEARTBEAT_PERIOD_MS 1000
+
+#define TEMP_TASK_PRIORITY (tskIDLE_PRIORITY + 3UL)
+static float core_temp;
+static TaskHandle_t temp_task;
 
 /* @section Main Application Setup
  *
@@ -71,31 +79,48 @@
  */
 
 /* LISTING_START(MainConfiguration): Init L2CAP SM ATT Server and start heartbeat timer */
-static int  le_notification_enabled;
+static int le_notification_enabled;
 static btstack_timer_source_t heartbeat;
 static btstack_packet_callback_registration_t hci_event_callback_registration;
 static hci_con_handle_t con_handle;
 static uint8_t battery = 100;
 
-static void packet_handler (uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size);
-static uint16_t att_read_callback(hci_con_handle_t con_handle, uint16_t att_handle, uint16_t offset, uint8_t * buffer, uint16_t buffer_size);
+static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size);
+static uint16_t att_read_callback(hci_con_handle_t con_handle, uint16_t att_handle, uint16_t offset, uint8_t *buffer, uint16_t buffer_size);
 static int att_write_callback(hci_con_handle_t con_handle, uint16_t att_handle, uint16_t transaction_mode, uint16_t offset, uint8_t *buffer, uint16_t buffer_size);
-static void  heartbeat_handler(struct btstack_timer_source *ts);
+static void heartbeat_handler(struct btstack_timer_source *ts);
 static void beat(void);
 
 #define APP_AD_FLAGS 0x06
 
 const uint8_t adv_data[] = {
     // Flags general discoverable
-    0x02, BLUETOOTH_DATA_TYPE_FLAGS, APP_AD_FLAGS,
+    0x02,
+    BLUETOOTH_DATA_TYPE_FLAGS,
+    APP_AD_FLAGS,
     // Name
-    11, BLUETOOTH_DATA_TYPE_COMPLETE_LOCAL_NAME, 'A', 's', 'h', 't', 'o', 'n', ' ', 'B', 'L', 'E',
+    11,
+    BLUETOOTH_DATA_TYPE_COMPLETE_LOCAL_NAME,
+    'M',
+    'u',
+    't',
+    'e',
+    'e',
+    'b',
+    ' ',
+    'B',
+    'L',
+    'E',
     // Incomplete List of 16-bit Service Class UUIDs -- FF10 - only valid for testing!
-    0x03, BLUETOOTH_DATA_TYPE_INCOMPLETE_LIST_OF_16_BIT_SERVICE_CLASS_UUIDS, 0x10, 0xff,
+    0x03,
+    BLUETOOTH_DATA_TYPE_INCOMPLETE_LIST_OF_16_BIT_SERVICE_CLASS_UUIDS,
+    0x10,
+    0xff,
 };
 const uint8_t adv_data_len = sizeof(adv_data);
 
-static void le_counter_setup(void){
+static void le_counter_setup(void)
+{
 
     l2cap_init();
 
@@ -115,7 +140,7 @@ static void le_counter_setup(void){
     bd_addr_t null_addr;
     memset(null_addr, 0, 6);
     gap_advertisements_set_params(adv_int_min, adv_int_max, adv_type, 0, null_addr, 0x07, 0x00);
-    gap_advertisements_set_data(adv_data_len, (uint8_t*) adv_data);
+    gap_advertisements_set_data(adv_data_len, (uint8_t *)adv_data);
     gap_advertisements_enable(1);
 
     // register for HCI events
@@ -142,26 +167,30 @@ static void le_counter_setup(void){
  * and request a ATT_EVENT_CAN_SEND_NOW to send a notification if enabled see Listing heartbeat.
  */
 
- /* LISTING_START(heartbeat): Hearbeat Handler */
-static int  counter = 0;
+/* LISTING_START(heartbeat): Hearbeat Handler */
+static int counter = 0;
 static char counter_string[30];
-static int  counter_string_len;
+static int counter_string_len;
 
-static void beat(void){
+static void beat(void)
+{
     counter++;
     counter_string_len = snprintf(counter_string, sizeof(counter_string), "BTstack counter %04u", counter);
     puts(counter_string);
 }
 
-static void heartbeat_handler(struct btstack_timer_source *ts){
-    if (le_notification_enabled) {
+static void heartbeat_handler(struct btstack_timer_source *ts)
+{
+    if (le_notification_enabled)
+    {
         beat();
         att_server_request_can_send_now_event(con_handle);
     }
 
     // simulate battery drain
     battery--;
-    if (battery < 50) {
+    if (battery < 50)
+    {
         battery = 100;
     }
     battery_service_server_set_battery_value(battery);
@@ -180,21 +209,24 @@ static void heartbeat_handler(struct btstack_timer_source *ts){
  */
 
 /* LISTING_START(packetHandler): Packet Handler */
-static void packet_handler (uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size){
+static void packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size)
+{
     UNUSED(channel);
     UNUSED(size);
 
-    if (packet_type != HCI_EVENT_PACKET) return;
+    if (packet_type != HCI_EVENT_PACKET)
+        return;
 
-    switch (hci_event_packet_get_type(packet)) {
-        case HCI_EVENT_DISCONNECTION_COMPLETE:
-            le_notification_enabled = 0;
-            break;
-        case ATT_EVENT_CAN_SEND_NOW:
-            att_server_notify(con_handle, ATT_CHARACTERISTIC_0000FF11_0000_1000_8000_00805F9B34FB_01_VALUE_HANDLE, (uint8_t*) counter_string, counter_string_len);
-            break;
-        default:
-            break;
+    switch (hci_event_packet_get_type(packet))
+    {
+    case HCI_EVENT_DISCONNECTION_COMPLETE:
+        le_notification_enabled = 0;
+        break;
+    case ATT_EVENT_CAN_SEND_NOW:
+        att_server_notify(con_handle, ATT_CHARACTERISTIC_0000FF11_0000_1000_8000_00805F9B34FB_01_VALUE_HANDLE, (uint8_t *)counter_string, counter_string_len);
+        break;
+    default:
+        break;
     }
 }
 
@@ -215,16 +247,34 @@ static void packet_handler (uint8_t packet_type, uint16_t channel, uint8_t *pack
 // - if buffer == NULL, don't copy data, just return size of value
 // - if buffer != NULL, copy data and return number bytes copied
 // @param offset defines start of attribute value
-static uint16_t att_read_callback(hci_con_handle_t connection_handle, uint16_t att_handle, uint16_t offset, uint8_t * buffer, uint16_t buffer_size){
+static uint16_t att_read_callback(hci_con_handle_t connection_handle, uint16_t att_handle, uint16_t offset, uint8_t *buffer, uint16_t buffer_size)
+{
     UNUSED(connection_handle);
 
-    if (att_handle == ATT_CHARACTERISTIC_0000FF11_0000_1000_8000_00805F9B34FB_01_VALUE_HANDLE){
+    if (att_handle == ATT_CHARACTERISTIC_0000FF11_0000_1000_8000_00805F9B34FB_01_VALUE_HANDLE)
+    {
         return att_read_callback_handle_blob((const uint8_t *)counter_string, counter_string_len, offset, buffer, buffer_size);
     }
+
+    if (att_handle == ATT_CHARACTERISTIC_ORG_BLUETOOTH_CHARACTERISTIC_BATTERY_LEVEL_01_VALUE_HANDLE)
+    {
+        return att_read_callback_handle_blob((const uint8_t *)counter_string, counter_string_len, offset, buffer, buffer_size);
+    }
+
+    if (att_handle == ATT_CHARACTERISTIC_ORG_BLUETOOTH_CHARACTERISTIC_TEMPERATURE_01_VALUE_HANDLE)
+    {
+        if (buffer != NULL)
+        {
+            printf("Core temperature: %0.2f\n", core_temp);
+        }
+        uint16_t data = 0;
+        data = (uint16_t)(core_temp * 100);
+        return att_read_callback_handle_little_endian_16(data, offset, buffer, buffer_size);
+    }
+
     return 0;
 }
 /* LISTING_END */
-
 
 /*
  * @section ATT Write
@@ -238,20 +288,31 @@ static uint16_t att_read_callback(hci_con_handle_t connection_handle, uint16_t a
  */
 
 /* LISTING_START(attWrite): ATT Write */
-static int att_write_callback(hci_con_handle_t connection_handle, uint16_t att_handle, uint16_t transaction_mode, uint16_t offset, uint8_t *buffer, uint16_t buffer_size){
-    switch (att_handle){
-        case ATT_CHARACTERISTIC_0000FF11_0000_1000_8000_00805F9B34FB_01_CLIENT_CONFIGURATION_HANDLE:
-            le_notification_enabled = little_endian_read_16(buffer, 0) == GATT_CLIENT_CHARACTERISTICS_CONFIGURATION_NOTIFICATION;
-            con_handle = connection_handle;
-            break;
-        case ATT_CHARACTERISTIC_0000FF11_0000_1000_8000_00805F9B34FB_01_VALUE_HANDLE:
-            printf("Write: transaction mode %u, offset %u, data (%u bytes): ", transaction_mode, offset, buffer_size);
-            printf_hexdump(buffer, buffer_size);
-            break;
-        default:
-            break;
+static int att_write_callback(hci_con_handle_t connection_handle, uint16_t att_handle, uint16_t transaction_mode, uint16_t offset, uint8_t *buffer, uint16_t buffer_size)
+{
+    switch (att_handle)
+    {
+    case ATT_CHARACTERISTIC_0000FF11_0000_1000_8000_00805F9B34FB_01_CLIENT_CONFIGURATION_HANDLE:
+        le_notification_enabled = little_endian_read_16(buffer, 0) == GATT_CLIENT_CHARACTERISTICS_CONFIGURATION_NOTIFICATION;
+        con_handle = connection_handle;
+        break;
+    case ATT_CHARACTERISTIC_0000FF11_0000_1000_8000_00805F9B34FB_01_VALUE_HANDLE:
+        printf("Write: transaction mode %u, offset %u, data (%u bytes): ", transaction_mode, offset, buffer_size);
+        printf_hexdump(buffer, buffer_size);
+        break;
+    default:
+        break;
     }
     return 0;
+}
+
+void temperature_task()
+{
+    while (true)
+    {
+        core_temp = temperature_poll();
+        vTaskDelay(100);
+    }
 }
 /* LISTING_END */
 
@@ -259,9 +320,10 @@ int btstack_main(void);
 int btstack_main(void)
 {
     le_counter_setup();
-
+    temperature_setup();
+    xTaskCreate(temperature_task, "TemperatureThread", 1024, NULL, TEMP_TASK_PRIORITY, &temp_task);
     // turn on!
-	hci_power_control(HCI_POWER_ON);
+    hci_power_control(HCI_POWER_ON);
 
     return 0;
 }
